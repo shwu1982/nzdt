@@ -1,0 +1,96 @@
+---
+- name: Fail over from New-Primary (hanadb02) to New-Secondary (hanadb01)
+  hosts: hanadb01
+  tasks:
+    - name: set maintenance off
+      command: pcs property set maintenance-mode=false
+      become: yes
+
+    - pause:
+        seconds: 30
+
+    - name: fail over to New-Secondary (from hanadb02 to hanadb01)
+      command: >
+        crm_resource --move
+        --resource SAPHana_HDB_00-clone SAPHanaTopology_HDB_00-clone g_ip_HDB_00 rsc_st_azure -H hanadb01
+      become: yes
+
+    - name: unregister site
+      shell: >
+        source /usr/sap/HDB/home/.sapenv.sh &&
+        hdbnsutil -sr_unregister --id=1
+      args:
+        chdir: /usr/sap/HDB/HDB00
+      register: unregister_site
+      delay: 5
+
+- name: re-register New-Secondary site (hanadb01)
+  hosts: hanadb01
+  become: yes
+  become_user: hdbadm
+  tasks:
+    - name: register hanadb01 with SITE1
+      shell: >
+        source /usr/sap/HDB/home/.sapenv.sh &&
+        hdbnsutil -sr_register --name=SITE1
+        --remoteHost=hanadb02
+        --remoteInstance=00
+        --replicationMode=syncmem
+        --operationMode=logreplay
+      args:
+        chdir: /usr/sap/HDB/HDB00
+      register: reregister_site
+      ignore_errors: yes
+
+    - name: HDB start
+      shell: >
+        source /usr/sap/HDB/home/.sapenv.sh &&
+        HDB start
+      args:
+        chdir: /usr/sap/HDB/HDB00
+
+
+    - name: HSR takeover from New-Primary (hanadb02) to New-Secondary (hanadb01)
+      shell: >
+        source /usr/sap/HDB/home/.sapenv.sh &&
+        hdbnsutil -sr_takeover -–suspendPrimary
+      args:
+        chdir: /usr/sap/HDB/HDB00
+      delay: 60
+
+    - name: wait until system replication status is active
+      shell: >
+        source /usr/sap/HDB/home/.sapenv.sh &&
+        python /usr/sap/HDB/HDB00/exe/python_support/systemReplicationStatus.py
+        | grep '^overall system replication' | cut -d':' -f2 | awk '{$1=$1};1'
+      args:
+        chdir: /usr/sap/HDB/HDB00/exe/python_support
+      register: wait_sys_replication
+      until: wait_sys_replication.stdout == 'ACTIVE'
+      retries: 300
+      delay: 10
+      failed_when: false
+      become: yes
+      become_user: hdbadm
+
+- name: re-register Old-Secondary site (hanadb02)
+  hosts: hanadb02
+  become: yes
+  become_user: hdbadm
+  tasks:
+    - name: register hanadb02 with SITE2
+      shell: >
+        source /usr/sap/HDB/home/.sapenv.sh &&
+        hdbnsutil -sr_register --name=SITE2
+        --remoteHost=hanadb01
+        --remoteInstance=00
+        --replicationMode=syncmem
+        --operationMode=logreplay
+      args:
+        chdir: /usr/sap/HDB/HDB00
+      register: reregister_site
+      become: yes
+      become_user: hdbadm
+      #  # #become_method: su
+      ignore_errors: yes
+
