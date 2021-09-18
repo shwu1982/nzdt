@@ -140,7 +140,9 @@
 
     - debug:
             msg: "This is the hana_primary_hostname after the second node upgrade - line142 : {{ hana_primary_hostname }}"
-
+    
+            #- name: Upgrade Dummy Package
+     
     - name: stop the secondary node before register to hanadb01 hsr
       shell: >
         source /usr/sap/HDB/home/.sapenv.sh &&
@@ -264,11 +266,9 @@
         seconds: 30
 
     - name: fail over to secondary
-      command: >
-        crm_resource --move
-        --resource SAPHana_HDB_00-clone SAPHanaTopology_HDB_00-clone g_ip_HDB_00 -H hanadb02
+      shell: >
+        pcs resource move g_ip_HDB_00 hanadb02
       become: yes
-      when: (pcs_host_secondary != 'null')
 
     - name: wait for status to be primary
       shell: >
@@ -317,15 +317,6 @@
       become: yes
       become_user: hdbadm
       when: (pcs_host_secondary != 'null')
-       # #become_method: su
-
- #- name: move the vip on s4app
-   #hosts: "tag_app_sap_hana_ha_demo:&tag_role_s4app"
-   #vars:
-    # this a temporary measure before implementing real vip
-     #sap_hana_vip: "{{ hostvars['hana_primary']['ip_address'] }}"
-   #roles:
-    # - s4-hosts
 
 - name: upgrade (primary)
   hosts: hanadb01
@@ -389,15 +380,6 @@
       become: no
       when: (pcs_host_primary != 'null')
 
-  post_tasks:
-    - name: set primary hostname
-      set_fact:
-        hana_primary_hostname: "{{ hostvars[groups['hana_secondary'][0]]['ansible_hostname'] }}"
-      when: (pcs_host_primary != 'null')
-
-    - debug:
-        msg: "This is the hana primary hostname after Primary node upgrade - line386: {{ hana_primary_hostname }}"
-
     - name: stop HDB before register old-primary node to HSR
       shell: >
         source /usr/sap/HDB/home/.sapenv.sh &&
@@ -423,26 +405,6 @@
        #become_method: su
       ignore_errors: yes
       when: (pcs_host_primary != 'null')
-
-      #- name: re-register site after upgrade online
-      #shell: >
-      #  source /usr/sap/HDB/home/.sapenv.sh &&
-      #  hdbnsutil -sr_register --name=NewSite2
-      #  --remoteHost=hanadb02
-      #  --remoteInstance=00
-      #  --replicationMode=syncmem
-      #  --online
-      #args:
-      #  chdir: /usr/sap/HDB/HDB00
-      #when: ('system must be shut down' in reregister_site.stdout)
-      #become: yes
-      #become_user: hdbadm
-      #when: (pcs_host_primary != 'null')
-       #become_method: su
-
-      #- name: reboot system
-      #reboot:
-      #when: (pcs_host_primary != 'null')
 
     - name: HDB start
       shell: >
@@ -477,12 +439,14 @@
       when: (pcs_host_secondary != 'null')
 
 
-- name: set to maintenance mode (secondary)
+- name: set pacemaker to manage mode
   hosts: hanadb02
   gather_facts: no
   tasks:
     - name: set to manage mode
       command: pcs property set maintenance-mode=false
+      become: yes
+
       #- name: rerun the insights client
       #hosts: hanas
       #tasks:
