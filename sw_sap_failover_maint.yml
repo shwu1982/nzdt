@@ -49,7 +49,7 @@
   become_user: hdbadm
   #  #become_method: su
   tasks:
-    - name: ensure replication status is ACTIVE
+    - name: ensure replication status is currently ACTIVE
       shell: >
         source /usr/sap/HDB/home/.sapenv.sh &&
         python /usr/sap/HDB/HDB00/exe/python_support/systemReplicationStatus.py
@@ -130,27 +130,18 @@
     - role: oatakan.rhel_upgrade
       update_reboot_kernel: yes
       become: no
-      when: (pcs_host_secondary != 'null')
 
-  post_tasks:
-    - name: set primary hostname
-      set_fact:
-        hana_primary_hostname: "{{ hostvars[groups['hana_primary'][0]]['ansible_hostname'] }}"
-        when: (pcs_host_secondary != 'null')
-
-    - debug:
-            msg: "This is the hana_primary_hostname after the second node upgrade - line142 : {{ hana_primary_hostname }}"
-    
-            #- name: Upgrade Dummy Package
-     
-    - name: stop the secondary node before register to hanadb01 hsr
+- name: Ensure HDB is stopped on the secondary node before register to hanadb01 hsr
+  hosts: hanadb02
+  become: yes
+  become_user: hdbadm
+  tasks:  
+    - name: stop HDB on hanadb02
       shell: >
         source /usr/sap/HDB/home/.sapenv.sh &&
         HDB stop
       args:
         chdir: /usr/sap/HDB/HDB00
-      become: yes
-      become_user: hdbadm
 
     - name: re-register secondary site after upgrade
       shell: >
@@ -168,28 +159,6 @@
       #  # #become_method: su
       ignore_errors: yes
       when: (pcs_host_secondary != 'null')
-
-   #  - name: re-register site after upgrade online mode
-     #  shell: >
-       #  source /usr/sap/HDB/home/.sapenv.sh &&
-   #      hdbnsutil -sr_register --name=hdb{{ sap_hana_site_id | default(((hostvars[groups['hana_primary'][0]]['sap_hana_site_id']) | int)+1) | string }}
-     #    --remoteHost={{ pcs_host_primary }}
-       #  --remoteInstance=00
- #        --replicationMode=syncmem
-   #      --online
-     #  args:
-       #  chdir: /usr/sap/HDB/HDB00
-   #    when: ('system must be shut down' in reregister_site.stdout)
-     #  become: yes
-   #    become_user: hdbadm
-       # #become_method: su
-  #     ignore_errors: yes
-    #   when: (pcs_host_secondary != 'null')
-
-      #- name: reboot system
-      #reboot:
-      #when: (pcs_host_secondary != 'null')
-      #become: yes
 
     - name: HDB start
       shell: >
@@ -227,37 +196,12 @@
       failed_when: false
 
 
-#- name: Suspend DB
-#  hosts: "tag_app_sap_hana_ha_demo:&tag_role_s4app"
-#  become: yes
-#  become_user: hdbadm
-#   #become_method: su
-#  tasks:
-#    - name: DB suspension
-#      file:
-#        path: /usr/sap/RHE/SYS/global/hdb_quiesce.dat
-#        state: touch
-#
-#    - name: wait for disconnect
-#      wait_for:
-#        file: /usr/sap/RHE/D00/work/dev_w<#>   # look for the latest file
-#        line: "disconnected from HDB"
-
 
 #3. Failover starts
 - name: Fail over from Primary to Secondary
   hosts: hanadb02
- #  pre_tasks:
-   #  - name: set new primary hana server ip
-   #  add_host:
-       #  name: hana_primary
- #        ip_address: "{{ ansible_ip_addresses[0] | default(ec2_private_ip_address) | default(private_ip) | default(ansible_host) | default(ansible_ssh_host) }}"
-   #    when: (pcs_host_secondary != 'null') 
-
- #    - debug:
-   #      var: hostvars['hana_primary']['ip_address']
   tasks:
-    - name: set maintenance off
+    - name: set maintenance off (pcs managed mode on)
       command: pcs property set maintenance-mode=false
       become: yes
       when: (pcs_host_secondary != 'null')
@@ -284,14 +228,6 @@
       become_user: hdbadm
       when: (pcs_host_secondary != 'null')
        # #become_method: su
-
-#    - name: wait for clone set
-#      shell: pcs status | grep "FAILED Master {{ ansible_fqdn }}"
-#      register: wait_for_clone_set
-#      until: wait_for_clone_set is success
-#      ignore_errors: yes
-#      retries: 30
-#      delay: 3
 
     - pause:
         seconds: 60
@@ -356,39 +292,17 @@
       retries: 10
       delay: 5
 
-    - name: HDB start
-      shell: >
-        source /usr/sap/HDB/home/.sapenv.sh &&
-        HDB start
-      args:
-        chdir: /usr/sap/HDB/HDB00
-      become: yes
-      become_user: hdbadm
-       #become_method: su
-      register: hdb_start
-      when:
-        - pcs_host_primary != 'null'
-        - sap_hana_site_id != ''
-        - unregister_site.rc == 0
-      failed_when:
-        - hdb_start.rc > 0
-        - ('process hdbdaemon HDB Daemon not running' not in hdb_start.stdout)
-
   roles:
     - role: oatakan.rhel_upgrade
       update_reboot_kernel: yes
       become: no
       when: (pcs_host_primary != 'null')
 
-    - name: stop HDB before register old-primary node to HSR
-      shell: >
-        source /usr/sap/HDB/home/.sapenv.sh &&
-        HDB stop
-      args:
-        chdir: /usr/sap/HDB/HDB00
-      become: yes
-      become_user: hdbadm
-    
+- name: stop HDB before register old-primary node to HSR
+  hosts: hanadb01
+  become: yes
+  become_user: hdbadm
+  tasks:
     - name: re-register site after upgrade
       shell: >
         source /usr/sap/HDB/home/.sapenv.sh &&
@@ -400,9 +314,6 @@
       args:
         chdir: /usr/sap/HDB/HDB00
       register: reregister_site
-      become: yes
-      become_user: hdbadm
-       #become_method: su
       ignore_errors: yes
       when: (pcs_host_primary != 'null')
 
@@ -417,12 +328,10 @@
       when: (pcs_host_primary != 'null')
        #become_method: su
 
-- name: wait for system replication (secondary)
+- name: wait for system replication 
   hosts: hanadb02
   become: yes
   become_user: hdbadm
-   #become_method: su
-
   tasks:
     - name: wait until system replication status is active
       shell: >
